@@ -43,6 +43,14 @@ def download_media():
             'outtmpl': f'{DOWNLOAD_FOLDER}/%(id)s.%(ext)s',
             'quiet': True,
             'no_warnings': True,
+            # --- 🚀 HYPER SPEED SETTINGS (MAX POWER) ---
+            'concurrent_fragment_downloads': 32, # เพิ่มท่อส่งข้อมูลเป็น 32 ท่อ (ดึงเต็มสปีด)
+            'http_chunk_size': 10485760 * 2,     # รับข้อมูลทีละ 20MB
+            'buffersize': 1024 * 1024 * 4,       # Buffer 4MB (ลดการเขียน Disk ถี่เกินไป)
+            'retries': 30,                       # พยายามใหม่ 30 ครั้งถ้าหลุด
+            'fragment_retries': 30,
+            'file_access_retries': 10,
+            # ------------------------------
         }
         
         ydl_opts.update(get_ffmpeg_opts())
@@ -58,22 +66,19 @@ def download_media():
             })
             ext = '.mp3'
         elif format_type == 'mp4':
-            # --- แก้ไขใหม่: บังคับเลือกไฟล์แบบ H.264 (AVC) แบบเข้มข้น ---
+            # ยังคงใช้ Logic เดิมเพื่อป้องกันไฟล์ HEVC
             if 'tiktok.com' in url:
-                # TikTok: ตัด /best ทิ้ง เพื่อไม่ให้หลุดไปเอา HEVC มาเด็ดขาด
-                # บังคับหาเฉพาะที่มี codec เป็น avc หรือ h264 เท่านั้น
                 ydl_opts.update({
                     'format': 'best[vcodec^=avc]/best[vcodec^=h264]/best[vcodec!^=hevc][vcodec!^=hvc1]',
                 })
             else:
-                # YouTube/Other: บังคับหา Video ที่เป็น AVC (h264) + Audio AAC
                 ydl_opts.update({
                     'format': 'bestvideo[vcodec^=avc]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                     'merge_output_format': 'mp4',
                 })
             ext = '.mp4'
 
-        print(f"Processing: {url} as {format_type}...")
+        print(f"Processing: {url} as {format_type} (Hyper Speed Mode)...")
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
