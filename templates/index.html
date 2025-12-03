@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Downloader (Local)</title>
+    <!-- ใช้ Tailwind CSS และ React ผ่าน CDN เพื่อความง่าย -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@17/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f3f4f6; }
+        .loader {
+            border-top-color: #3498db;
+            -webkit-animation: spinner 1.5s linear infinite;
+            animation: spinner 1.5s linear infinite;
+        }
+        @keyframes spinner {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+
+<div id="root"></div>
+
+<script type="text/babel">
+    const { useState } = React;
+
+    function App() {
+        const [url, setUrl] = useState('');
+        const [type, setType] = useState('mp3');
+        const [loading, setLoading] = useState(false);
+        const [message, setMessage] = useState('');
+        const [error, setError] = useState(false);
+
+        const handleDownload = async () => {
+            if (!url) return;
+            
+            setLoading(true);
+            setMessage('กำลังประมวลผล... กรุณารอสักครู่ (ไฟล์ใหญ่อาจใช้นาน)');
+            setError(false);
+
+            try {
+                const response = await fetch('/download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url, type })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                setMessage('ดาวน์โหลดเสร็จสิ้น! กำลังส่งไฟล์...');
+                
+                // Trigger Browser download
+                window.location.href = data.download_url;
+                
+                setTimeout(() => {
+                    setLoading(false);
+                    setMessage('เรียบร้อย! พร้อมโหลดเพลงต่อไป');
+                    setUrl('');
+                }, 2000);
+
+            } catch (err) {
+                setLoading(false);
+                setError(true);
+                setMessage('เกิดข้อผิดพลาด: ' + err.message);
+            }
+        };
+
+        return (
+            <div className="min-h-screen flex items-center justify-center px-4">
+                <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md">
+                    <div className="text-center mb-6">
+                        <h1 className="text-3xl font-bold text-gray-800 mb-2">
+                            <i className="fa-solid fa-cloud-arrow-down text-blue-500 mr-2"></i>
+                            Local Downloader
+                        </h1>
+                        <p className="text-gray-500 text-sm">รองรับ YouTube, TikTok, X และอีกมากมาย</p>
+                    </div>
+
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-gray-700 text-sm font-bold mb-2">วางลิงก์ที่นี่</label>
+                            <input 
+                                type="text" 
+                                value={url}
+                                onChange={(e) => setUrl(e.target.value)}
+                                placeholder="https://www.youtube.com/watch?v=..."
+                                className="w-full px-4 py-3 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-gray-700 text-sm font-bold mb-2">เลือกรูปแบบไฟล์</label>
+                            <div className="grid grid-cols-2 gap-4">
+                                <button 
+                                    onClick={() => setType('mp3')}
+                                    className={`py-3 rounded-lg font-medium transition ${type === 'mp3' ? 'bg-blue-500 text-white shadow-md' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                >
+                                    <i className="fa-solid fa-music mr-2"></i> MP3 (Audio)
+                                </button>
+                                <button 
+                                    onClick={() => setType('mp4')}
+                                    className={`py-3 rounded-lg font-medium transition ${type === 'mp4' ? 'bg-indigo-500 text-white shadow-md' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                >
+                                    <i className="fa-solid fa-video mr-2"></i> MP4 (Video)
+                                </button>
+                            </div>
+                        </div>
+
+                        <button 
+                            onClick={handleDownload}
+                            disabled={loading || !url}
+                            className={`w-full py-3 rounded-lg font-bold text-white transition transform active:scale-95 ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg'}`}
+                        >
+                            {loading ? (
+                                <span className="flex items-center justify-center">
+                                    <div className="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-6 w-6 mr-2"></div>
+                                    กำลังทำงาน...
+                                </span>
+                            ) : 'ดาวน์โหลดทันที'}
+                        </button>
+
+                        {message && (
+                            <div className={`mt-4 p-3 rounded-lg text-center text-sm ${error ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                                {message}
+                            </div>
+                        )}
+                    </div>
+                    
+                    <div className="mt-6 text-center text-xs text-gray-400">
+                        * ไฟล์จะถูกเซฟด้วยคุณภาพสูงสุดเท่าที่เป็นไปได้
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+</script>
+
+</body>
+</html>
