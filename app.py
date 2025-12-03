@@ -66,16 +66,24 @@ def download_media():
             })
             ext = '.mp3'
         elif format_type == 'mp4':
-            # ยังคงใช้ Logic เดิมเพื่อป้องกันไฟล์ HEVC
-            if 'tiktok.com' in url:
-                ydl_opts.update({
-                    'format': 'best[vcodec^=avc]/best[vcodec^=h264]/best[vcodec!^=hevc][vcodec!^=hvc1]',
-                })
-            else:
-                ydl_opts.update({
-                    'format': 'bestvideo[vcodec^=avc]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-                    'merge_output_format': 'mp4',
-                })
+            # --- 🌍 UNIVERSAL COMPATIBILITY MODE ---
+            # รวม Logic เพื่อรองรับทุก Player (YouTube, FB, IG, TikTok, Vimeo, X, etc.)
+            # โดยยังคงกฎเหล็กคือ "พยายามหลีกเลี่ยง HEVC" เพื่อให้เปิดบน Windows ได้
+            
+            universal_format_rule = (
+                'bestvideo[vcodec^=avc]+bestaudio[ext=m4a]/'  # 1. YouTube/Adaptive: ภาพ AVC + เสียง M4A (ดีสุด)
+                'bestvideo[vcodec^=h264]+bestaudio[ext=m4a]/' # 2. เหมือนข้อ 1 แต่ชื่อ codec ต่างกัน
+                'best[vcodec^=avc]/'                          # 3. Single File: เว็บทั่วไป/TikTok ที่เป็น AVC
+                'best[vcodec^=h264]/'                         # 4. Single File: เว็บทั่วไป/TikTok ที่เป็น H264
+                'best[ext=mp4][vcodec!^=hevc][vcodec!^=hvc1]/' # 5. ไฟล์ MP4 ทั่วไป (ที่ไม่ใช่ HEVC)
+                'best[vcodec!^=hevc][vcodec!^=hvc1]/'          # 6. ไฟล์อะไรก็ได้ (ที่ไม่ใช่ HEVC)
+                'best'                                         # 7. (Last Resort) ถ้าไม่มีทางเลือกอื่นจริงๆ เอามาเถอะ
+            )
+
+            ydl_opts.update({
+                'format': universal_format_rule,
+                'merge_output_format': 'mp4',
+            })
             ext = '.mp4'
 
         print(f"Processing: {url} as {format_type} (Hyper Speed Mode)...")
