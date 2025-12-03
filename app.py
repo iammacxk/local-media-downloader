@@ -25,7 +25,7 @@ def get_ffmpeg_opts():
 def index():
     return render_template('index.html')
 
-# --- 🆕 API: ดึงข้อมูล Video/Playlist (ปรับปรุงใหม่) ---
+# --- 🆕 API: ดึงข้อมูล Video/Playlist (Turbo Fetch) ---
 @app.route('/fetch-info', methods=['POST'])
 def fetch_info():
     data = request.json
@@ -34,63 +34,82 @@ def fetch_info():
     if not url:
         return jsonify({'error': 'กรุณาใส่ลิงก์'}), 400
 
-    try:
-        # ตั้งค่าการดึงข้อมูล
-        ydl_opts = {
-            'quiet': True,
-            'extract_flat': True, # เปลี่ยนเป็น True เพื่อให้ดึง Mix ได้แม่นยำขึ้น
-            'dump_single_json': True,
-            'no_warnings': True,
-            'noplaylist': False, # สำคัญ: บังคับให้มองหา Playlist ก่อน
-        }
-        
-        # ถ้าเป็น X/Twitter ให้ลองใช้ Cookies จาก Edge
-        if 'twitter.com' in url or 'x.com' in url:
-             ydl_opts.update({'cookiesfrombrowser': ('edge',)})
+    # กำหนดเบราว์เซอร์ที่จะลองใช้ (สำหรับเว็บที่ต้องล็อกอิน)
+    browsers_to_try = [None]
+    if any(domain in url for domain in ['twitter.com', 'x.com', 'pornhub.com']):
+        browsers_to_try = ['edge', 'chrome', 'firefox', None]
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            result = ydl.extract_info(url, download=False)
+    result = None
+    last_error = None
 
-        entries = []
-        title = result.get('title', 'Unknown Title')
-        is_playlist = False
-
-        # Logic แยกแยะว่าเป็น Playlist หรือ Video เดียว
-        if 'entries' in result:
-            is_playlist = True
-            # YouTube Mix มักจะไม่มี Title ที่ชัดเจนในบางที
-            if not title and 'id' in result:
-                title = f"Playlist: {result['id']}"
-                
-            for entry in result['entries']:
-                if entry: 
-                    # กรองเฉพาะรายการที่ดูได้ (บางที Mix มีรายการที่เป็น None)
-                    entries.append({
-                        'title': entry.get('title', 'Unknown Title'),
-                        'url': entry.get('url') if entry.get('url') else entry.get('original_url'),
-                        'id': entry.get('id'),
-                        'duration': entry.get('duration')
-                    })
-        else:
-            # กรณีเป็นคลิปเดียว
-            entries.append({
-                'title': result.get('title'),
-                'url': result.get('webpage_url', url),
-                'id': result.get('id'),
-                'duration': result.get('duration')
-            })
+    for browser in browsers_to_try:
+        try:
+            # --- ⚡ LIGHTWEIGHT SETTINGS (เน้นดึงข้อมูลเร็วที่สุด) ---
+            ydl_opts = {
+                'quiet': True,
+                'extract_flat': True,       # ดึงแค่ Metadata พื้นฐาน (Title/ID) ไม่เจาะลึก (เร็วมาก)
+                'dump_single_json': True,
+                'no_warnings': True,
+                'noplaylist': False,        # อนุญาตให้ดึง Playlist
+                'skip_download': True,      # ย้ำว่าห้ามโหลดไฟล์
+                'ignoreerrors': True,       # ข้ามคลิปที่เสีย/ดูไม่ได้ทันที ไม่ต้องรอ Retry
+                'playlist_items': '1:2000', # จำกัดไว้ 2000 เพลงแรก (กันเครื่องค้างถ้าเจอ Playlist เป็นหมื่น)
+            }
             
-        return jsonify({
-            'success': True,
-            'is_playlist': is_playlist,
-            'title': title,
-            'entries': entries
+            if browser:
+                ydl_opts.update({'cookiesfrombrowser': (browser,)})
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                result = ydl.extract_info(url, download=False)
+            
+            break # สำเร็จแล้วออกเลย
+            
+        except Exception as e:
+            last_error = e
+            err_msg = str(e).lower()
+            # ถ้าเป็นปัญหา Cookies ให้ลองเบราว์เซอร์อื่นต่อ
+            if "cookie" in err_msg or "browser" in err_msg or "lock" in err_msg or "copy" in err_msg:
+                if browser is not None: continue
+            break # ถ้าเป็น Error อื่นหยุดเลย
+
+    if not result:
+        return jsonify({'error': str(last_error)}), 500
+
+    entries = []
+    title = result.get('title', 'Unknown Title')
+    is_playlist = False
+
+    # Logic แยกแยะ Playlist
+    if 'entries' in result:
+        is_playlist = True
+        if not title and 'id' in result:
+            title = f"Playlist: {result['id']}"
+            
+        for entry in result['entries']:
+            if entry: 
+                entries.append({
+                    'title': entry.get('title', 'Unknown Title'),
+                    'url': entry.get('url') if entry.get('url') else entry.get('original_url'),
+                    'id': entry.get('id'),
+                    # หมายเหตุ: extract_flat: True อาจจะไม่ได้ duration มาในบางเว็บ เพื่อแลกกับความเร็ว
+                    'duration': entry.get('duration') 
+                })
+    else:
+        entries.append({
+            'title': result.get('title'),
+            'url': result.get('webpage_url', url),
+            'id': result.get('id'),
+            'duration': result.get('duration')
         })
+        
+    return jsonify({
+        'success': True,
+        'is_playlist': is_playlist,
+        'title': title,
+        'entries': entries
+    })
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-# --- API เดิม: ดาวน์โหลดไฟล์ (เวอร์ชันสมบูรณ์) ---
+# --- API เดิม: ดาวน์โหลดไฟล์ ---
 @app.route('/download', methods=['POST'])
 def download_media():
     data = request.json
@@ -99,13 +118,12 @@ def download_media():
 
     if not url: return jsonify({'error': 'กรุณาใส่ลิงก์'}), 400
 
-    # ฟังก์ชันสร้าง Options
     def create_opts(browser_source=None):
         opts = {
             'outtmpl': f'{DOWNLOAD_FOLDER}/%(id)s.%(ext)s',
             'quiet': True,
             'no_warnings': True,
-            # Stealth Turbo Mode
+            # Stealth Turbo Mode for Download
             'concurrent_fragment_downloads': 16, 
             'http_chunk_size': 10485760,
             'retries': 10,
@@ -135,12 +153,12 @@ def download_media():
         
         return opts
 
-    # Smart Switch Logic
     success = False
     info = None
     last_error = None
     browsers_to_try = [None]
-    if 'twitter.com' in url or 'x.com' in url:
+    
+    if any(domain in url for domain in ['twitter.com', 'x.com', 'pornhub.com']):
         browsers_to_try = ['edge', 'chrome', 'firefox', None]
 
     print(f"🚀 Processing: {url}")
@@ -167,9 +185,9 @@ def download_media():
         if "sensitive" in error_text.lower():
             error_text = "⚠️ ติดเนื้อหา Sensitive (ต้องเปิดตั้งค่าใน X ก่อน)"
         elif "cookie" in error_text.lower():
-            error_text = "🔐 อ่าน Cookies ไม่ได้! (ลองล็อกอิน X ใน Edge ทิ้งไว้)"
+            error_text = "🔐 อ่าน Cookies ไม่ได้! (ลองล็อกอิน X/Pornhub ใน Edge ทิ้งไว้)"
         elif "no video" in error_text.lower():
-            error_text = "❌ X บล็อก Guest Mode (ลองล็อกอิน X ใน Edge ทิ้งไว้)"
+            error_text = "❌ ไม่สามารถเข้าถึงวิดีโอได้ (ลองล็อกอินใน Edge ทิ้งไว้)"
         return jsonify({'error': error_text}), 500
 
     try:
