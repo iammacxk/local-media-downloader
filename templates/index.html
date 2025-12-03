@@ -3,24 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Universal Downloader (Local)</title>
-    <!-- ใช้ Tailwind CSS และ React ผ่าน CDN เพื่อความง่าย -->
+    <title>Ultimate Downloader Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@17/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
-        body { background-color: #f3f4f6; }
-        .loader {
-            border-top-color: #3498db;
-            -webkit-animation: spinner 1.5s linear infinite;
-            animation: spinner 1.5s linear infinite;
-        }
-        @keyframes spinner {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
+        body { background-color: #f0f2f5; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .loader { border: 3px solid #f3f3f3; border-top: 3px solid #3498db; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -28,124 +21,216 @@
 <div id="root"></div>
 
 <script type="text/babel">
-    const { useState } = React;
+    const { useState, useEffect } = React;
 
     function App() {
-        const [url, setUrl] = useState('');
-        const [type, setType] = useState('mp3');
-        const [loading, setLoading] = useState(false);
-        const [message, setMessage] = useState('');
-        const [error, setError] = useState(false);
+        const [urlInput, setUrlInput] = useState('');
+        const [formatType, setFormatType] = useState('mp3');
+        const [fetchLoading, setFetchLoading] = useState(false);
+        const [playlistData, setPlaylistData] = useState(null);
+        const [selectedItems, setSelectedItems] = useState({});
+        const [queue, setQueue] = useState([]);
+        const [isProcessingQueue, setIsProcessingQueue] = useState(false);
 
-        const handleDownload = async () => {
-            if (!url) return;
+        // --- Helper: ตรวจสอบแหล่งที่มา ---
+        const getSourceInfo = (url) => {
+            if (url.includes('youtube') || url.includes('youtu.be')) return { icon: 'fa-youtube', color: 'text-red-600', name: 'YouTube' };
+            if (url.includes('tiktok')) return { icon: 'fa-tiktok', color: 'text-black', name: 'TikTok' };
+            if (url.includes('twitter') || url.includes('x.com')) return { icon: 'fa-x-twitter', color: 'text-gray-900', name: 'X (Twitter)' };
+            if (url.includes('facebook') || url.includes('fb.watch')) return { icon: 'fa-facebook', color: 'text-blue-700', name: 'Facebook' };
+            if (url.includes('instagram')) return { icon: 'fa-instagram', color: 'text-pink-600', name: 'Instagram' };
+            return { icon: 'fa-globe', color: 'text-gray-500', name: 'Web' };
+        };
+
+        const handleFetch = async () => {
+            if (!urlInput) return;
+            setFetchLoading(true);
+            setPlaylistData(null);
             
-            setLoading(true);
-            setMessage('กำลังประมวลผล... กรุณารอสักครู่ (ไฟล์ใหญ่อาจใช้นาน)');
-            setError(false);
-
             try {
-                const response = await fetch('/download', {
+                const res = await fetch('/fetch-info', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url, type })
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ url: urlInput })
                 });
+                const data = await res.json();
+                
+                if (data.error) throw new Error(data.error);
 
-                const data = await response.json();
-
-                if (data.error) {
-                    throw new Error(data.error);
+                if (!data.is_playlist) {
+                    addToQueue(data.entries[0]);
+                    setUrlInput('');
+                } else {
+                    setPlaylistData(data);
+                    const initialSelected = {};
+                    data.entries.forEach(e => initialSelected[e.id] = true);
+                    setSelectedItems(initialSelected);
                 }
-
-                setMessage('ดาวน์โหลดเสร็จสิ้น! กำลังส่งไฟล์...');
-                
-                // Trigger Browser download
-                window.location.href = data.download_url;
-                
-                setTimeout(() => {
-                    setLoading(false);
-                    setMessage('เรียบร้อย! พร้อมโหลดเพลงต่อไป');
-                    setUrl('');
-                }, 2000);
-
             } catch (err) {
-                setLoading(false);
-                setError(true);
-                setMessage('เกิดข้อผิดพลาด: ' + err.message);
+                alert('เกิดข้อผิดพลาด: ' + err.message);
+            } finally {
+                setFetchLoading(false);
             }
         };
 
+        const addToQueue = (item) => {
+            setQueue(prev => {
+                if (prev.find(q => q.id === item.id)) return prev;
+                return [...prev, {
+                    ...item,
+                    status: 'waiting',
+                    type: formatType,
+                    addedAt: Date.now()
+                }];
+            });
+        };
+
+        const addSelectedToQueue = () => {
+            if (!playlistData) return;
+            const itemsToAdd = playlistData.entries.filter(e => selectedItems[e.id]);
+            itemsToAdd.forEach(item => addToQueue(item));
+            setPlaylistData(null);
+            setUrlInput('');
+        };
+
+        useEffect(() => {
+            if (isProcessingQueue) return;
+            const nextItem = queue.find(q => q.status === 'waiting');
+            if (nextItem) processDownload(nextItem);
+        }, [queue, isProcessingQueue]);
+
+        const processDownload = async (item) => {
+            setIsProcessingQueue(true);
+            updateQueueStatus(item.id, 'downloading');
+            try {
+                const res = await fetch('/download', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ url: item.url, type: item.type })
+                });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                updateQueueStatus(item.id, 'done', data.download_url);
+            } catch (err) {
+                updateQueueStatus(item.id, 'error', null, err.message);
+            } finally {
+                setIsProcessingQueue(false);
+            }
+        };
+
+        const updateQueueStatus = (id, status, downloadUrl = null, errorMsg = null) => {
+            setQueue(prev => prev.map(q => q.id === id ? { ...q, status, downloadUrl, error: errorMsg } : q));
+        };
+        
+        const removeFromQueue = (id) => setQueue(prev => prev.filter(q => q.id !== id));
+        const toggleSelect = (id) => setSelectedItems(prev => ({...prev, [id]: !prev[id]}));
+
         return (
-            <div className="min-h-screen flex items-center justify-center px-4">
-                <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md">
-                    <div className="text-center mb-6">
-                        <h1 className="text-3xl font-bold text-gray-800 mb-2">
-                            <i className="fa-solid fa-cloud-arrow-down text-blue-500 mr-2"></i>
-                            Local Downloader
-                        </h1>
-                        <p className="text-gray-500 text-sm">รองรับ YouTube, TikTok, X และอีกมากมาย</p>
+            <div className="min-h-screen p-6 flex flex-col md:flex-row gap-6 max-w-7xl mx-auto">
+                {/* Left Panel */}
+                <div className="w-full md:w-1/3 space-y-4">
+                    <div className="bg-white p-6 rounded-xl shadow-lg">
+                        <h1 className="text-2xl font-bold mb-4 text-gray-800"><i className="fa-solid fa-cloud-arrow-down text-blue-500"></i> Downloader Pro</h1>
+                        <div className="space-y-3">
+                            <input type="text" value={urlInput} onChange={(e) => setUrlInput(e.target.value)} placeholder="วางลิงก์ YouTube/Playlist/X ที่นี่..." className="w-full px-4 py-2 rounded-lg border focus:ring-2 focus:ring-blue-500 outline-none"/>
+                            <div className="flex gap-2">
+                                <button onClick={() => setFormatType('mp3')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${formatType==='mp3'?'bg-blue-50 border-blue-500 text-blue-600':'bg-white text-gray-500 hover:bg-gray-50'}`}><i className="fa-solid fa-music"></i> MP3</button>
+                                <button onClick={() => setFormatType('mp4')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${formatType==='mp4'?'bg-indigo-50 border-indigo-500 text-indigo-600':'bg-white text-gray-500 hover:bg-gray-50'}`}><i className="fa-solid fa-video"></i> MP4</button>
+                            </div>
+                            <button onClick={handleFetch} disabled={fetchLoading || !urlInput} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold shadow-md transition flex justify-center items-center disabled:opacity-50">
+                                {fetchLoading ? <div className="loader mr-2"></div> : <i className="fa-solid fa-search mr-2"></i>} ดึงข้อมูล / เพิ่มลงคิว
+                            </button>
+                        </div>
                     </div>
 
-                    <div className="space-y-4">
-                        <div>
-                            <label className="block text-gray-700 text-sm font-bold mb-2">วางลิงก์ที่นี่</label>
-                            <input 
-                                type="text" 
-                                value={url}
-                                onChange={(e) => setUrl(e.target.value)}
-                                placeholder="https://www.youtube.com/watch?v=..."
-                                className="w-full px-4 py-3 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                            />
-                        </div>
-
-                        <div>
-                            <label className="block text-gray-700 text-sm font-bold mb-2">เลือกรูปแบบไฟล์</label>
-                            <div className="grid grid-cols-2 gap-4">
-                                <button 
-                                    onClick={() => setType('mp3')}
-                                    className={`py-3 rounded-lg font-medium transition ${type === 'mp3' ? 'bg-blue-500 text-white shadow-md' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                                >
-                                    <i className="fa-solid fa-music mr-2"></i> MP3 (Audio)
-                                </button>
-                                <button 
-                                    onClick={() => setType('mp4')}
-                                    className={`py-3 rounded-lg font-medium transition ${type === 'mp4' ? 'bg-indigo-500 text-white shadow-md' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                                >
-                                    <i className="fa-solid fa-video mr-2"></i> MP4 (Video)
-                                </button>
+                    {playlistData && (
+                        <div className="bg-white p-4 rounded-xl shadow-lg border-2 border-blue-100 animate-fade-in">
+                            <div className="flex justify-between items-center mb-3">
+                                <h3 className="font-bold text-gray-700 truncate max-w-[200px]">{playlistData.title}</h3>
+                                <div className="text-xs space-x-2">
+                                    <button onClick={() => { const all = {}; playlistData.entries.forEach(e => all[e.id]=true); setSelectedItems(all); }} className="text-blue-600 hover:underline">เลือกทั้งหมด</button>
+                                    <button onClick={() => setSelectedItems({})} className="text-gray-500 hover:underline">ไม่เลือก</button>
+                                </div>
+                            </div>
+                            <div className="max-h-60 overflow-y-auto space-y-1 mb-3 pr-1 scrollbar-thin">
+                                {playlistData.entries.map((entry, idx) => (
+                                    <div key={entry.id} className="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer" onClick={() => toggleSelect(entry.id)}>
+                                        <input type="checkbox" checked={!!selectedItems[entry.id]} readOnly className="mr-3 h-4 w-4 text-blue-600 rounded"/>
+                                        <div className="text-sm truncate flex-1">{idx+1}. {entry.title}</div>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => setPlaylistData(null)} className="flex-1 py-2 text-gray-500 hover:bg-gray-100 rounded-lg">ยกเลิก</button>
+                                <button onClick={addSelectedToQueue} className="flex-1 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg font-bold shadow"><i className="fa-solid fa-plus mr-1"></i> เพิ่ม {Object.values(selectedItems).filter(Boolean).length} รายการ</button>
                             </div>
                         </div>
+                    )}
+                </div>
 
-                        <button 
-                            onClick={handleDownload}
-                            disabled={loading || !url}
-                            className={`w-full py-3 rounded-lg font-bold text-white transition transform active:scale-95 ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg'}`}
-                        >
-                            {loading ? (
-                                <span className="flex items-center justify-center">
-                                    <div className="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-6 w-6 mr-2"></div>
-                                    กำลังทำงาน...
-                                </span>
-                            ) : 'ดาวน์โหลด'}
-                        </button>
+                {/* Right Panel */}
+                <div className="w-full md:w-2/3">
+                    <div className="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col h-[80vh]">
+                        <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+                            <h2 className="font-bold text-gray-700"><i className="fa-solid fa-list-check mr-2 text-indigo-500"></i> รายการรอโหลด ({queue.length})</h2>
+                            <div className="text-xs text-gray-500">{queue.filter(q => q.status === 'done').length} เสร็จสิ้น / {queue.filter(q => q.status === 'waiting').length} รอคิว</div>
+                        </div>
 
-                        {message && (
-                            <div className={`mt-4 p-3 rounded-lg text-center text-sm ${error ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-                                {message}
-                            </div>
-                        )}
-                    </div>
-                    
-                    <div className="mt-6 text-center text-xs text-gray-400">
-                        * ไฟล์จะถูกเซฟด้วยคุณภาพสูงสุดเท่าที่เป็นไปได้
+                        <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
+                            {queue.length === 0 ? (
+                                <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                                    <i className="fa-solid fa-basket-shopping text-6xl mb-4 opacity-20"></i>
+                                    <p>ยังไม่มีรายการในคิว</p>
+                                    <p className="text-sm">วางลิงก์ด้านซ้ายแล้วกดเพิ่มได้เลย</p>
+                                </div>
+                            ) : (
+                                queue.map((item, index) => {
+                                    const source = getSourceInfo(item.url);
+                                    return (
+                                        <div key={item.id + index} className="bg-white p-3 rounded-lg shadow-sm border flex items-center gap-4 transition hover:shadow-md">
+                                            <div className="w-10 flex justify-center">
+                                                {item.status === 'waiting' && <i className="fa-regular fa-clock text-gray-400 text-xl"></i>}
+                                                {item.status === 'downloading' && <div className="loader"></div>}
+                                                {item.status === 'done' && <i className="fa-solid fa-check-circle text-green-500 text-xl"></i>}
+                                                {item.status === 'error' && <i className="fa-solid fa-circle-exclamation text-red-500 text-xl"></i>}
+                                            </div>
+
+                                            <div className="flex-1 min-w-0">
+                                                <div className="font-medium text-gray-800 truncate" title={item.title}>{item.title}</div>
+                                                <div className="flex items-center gap-3 mt-1">
+                                                    {/* Source Badge */}
+                                                    <span className={`text-xs flex items-center gap-1 font-semibold ${source.color}`}>
+                                                        <i className={`fa-brands ${source.icon}`}></i> {source.name}
+                                                    </span>
+                                                    <div className="text-xs flex gap-2">
+                                                        <span className={`px-2 py-0.5 rounded text-white ${item.type==='mp3'?'bg-blue-400':'bg-indigo-400'}`}>{item.type.toUpperCase()}</span>
+                                                        {item.status === 'error' && <span className="text-red-500 truncate max-w-xs">{item.error}</span>}
+                                                        {item.status === 'waiting' && <span className="text-gray-400">รอคิว...</span>}
+                                                        {item.status === 'downloading' && <span className="text-blue-500 animate-pulse">กำลังดาวน์โหลด...</span>}
+                                                        {item.status === 'done' && <span className="text-green-600">เสร็จสิ้น</span>}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="flex gap-2">
+                                                {item.status === 'done' && (
+                                                    <a href={item.downloadUrl} className="p-2 text-green-600 hover:bg-green-50 rounded-full transition" title="Save File"><i className="fa-solid fa-download"></i></a>
+                                                )}
+                                                {item.status !== 'downloading' && (
+                                                    <button onClick={() => removeFromQueue(item.id)} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition"><i className="fa-solid fa-trash"></i></button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
                     </div>
                 </div>
             </div>
         );
     }
-
     ReactDOM.render(<App />, document.getElementById('root'));
 </script>
-
 </body>
 </html>
