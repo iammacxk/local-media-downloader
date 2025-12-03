@@ -1,6 +1,6 @@
 import os
 import time
-import shutil # เพิ่มตัวช่วยเช็คโปรแกรมในเครื่อง
+import shutil
 from flask import Flask, request, send_file, jsonify, render_template
 import yt_dlp
 
@@ -11,21 +11,16 @@ if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
 # --- ตั้งค่า Path ของ FFmpeg ---
-# ระบบจะเช็คให้อัตโนมัติ:
-# 1. เช็คว่ามีโฟลเดอร์ C:\ffmpeg\bin หรือไม่ (สำหรับคนลง manual)
-# 2. ถ้าไม่มี จะปล่อยให้ yt-dlp หาในเครื่องเอง (สำหรับคนลง winget)
 CUSTOM_FFMPEG_PATH = r"C:\ffmpeg\bin"
 
 def get_ffmpeg_opts():
-    # เช็คว่ามีไฟล์ ffmpeg.exe ในโฟลเดอร์ที่ระบุไหม
     if os.path.exists(os.path.join(CUSTOM_FFMPEG_PATH, 'ffmpeg.exe')):
         print(f"Found FFmpeg at custom path: {CUSTOM_FFMPEG_PATH}")
         return {'ffmpeg_location': CUSTOM_FFMPEG_PATH}
     
-    # เช็คว่าในเครื่องมี ffmpeg หรือไม่ (ผ่าน Environment Variables)
     if shutil.which('ffmpeg'):
         print("Found FFmpeg in system PATH")
-        return {} # ไม่ต้องตั้งค่า path เดี๋ยว yt-dlp หาเจอเอง
+        return {} 
         
     print("WARNING: FFmpeg not found! Merging video/audio might fail.")
     return {}
@@ -44,14 +39,12 @@ def download_media():
         return jsonify({'error': 'กรุณาใส่ลิงก์'}), 400
 
     try:
-        # เริ่มต้นตั้งค่า yt-dlp
         ydl_opts = {
-            'outtmpl': f'{DOWNLOAD_FOLDER}/%(title)s.%(ext)s',
+            'outtmpl': f'{DOWNLOAD_FOLDER}/%(id)s.%(ext)s',
             'quiet': True,
             'no_warnings': True,
         }
         
-        # เพิ่มการตั้งค่า FFmpeg แบบอัตโนมัติ
         ydl_opts.update(get_ffmpeg_opts())
 
         if format_type == 'mp3':
@@ -65,26 +58,40 @@ def download_media():
             })
             ext = '.mp3'
         elif format_type == 'mp4':
-            ydl_opts.update({
-                # เลือกไฟล์ Video ที่เป็น mp4 และ Audio ที่เป็น m4a (AAC) เพื่อลดปัญหา codec
-                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
-                'merge_output_format': 'mp4',
-            })
+            # --- แก้ไขใหม่: บังคับเลือกไฟล์แบบ H.264 (AVC) แบบเข้มข้น ---
+            if 'tiktok.com' in url:
+                # TikTok: ตัด /best ทิ้ง เพื่อไม่ให้หลุดไปเอา HEVC มาเด็ดขาด
+                # บังคับหาเฉพาะที่มี codec เป็น avc หรือ h264 เท่านั้น
+                ydl_opts.update({
+                    'format': 'best[vcodec^=avc]/best[vcodec^=h264]/best[vcodec!^=hevc][vcodec!^=hvc1]',
+                })
+            else:
+                # YouTube/Other: บังคับหา Video ที่เป็น AVC (h264) + Audio AAC
+                ydl_opts.update({
+                    'format': 'bestvideo[vcodec^=avc]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                    'merge_output_format': 'mp4',
+                })
             ext = '.mp4'
 
         print(f"Processing: {url} as {format_type}...")
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
+            file_id = info.get('id', 'video')
+            video_title = info.get('title', 'video')
             
-            base, _ = os.path.splitext(filename)
-            final_filename = base + ext
+            filename_on_disk = f"{file_id}{ext}"
+            
+        safe_title = "".join([c for c in video_title if c not in r'<>:"/\|?*'])
+        download_filename = f"{safe_title}{ext}"
+
+        from urllib.parse import quote
+        encoded_title = quote(download_filename)
 
         return jsonify({
             'success': True,
-            'filename': os.path.basename(final_filename),
-            'download_url': f'/get-file/{os.path.basename(final_filename)}'
+            'filename': filename_on_disk,
+            'download_url': f'/get-file/{filename_on_disk}?title={encoded_title}'
         })
 
     except Exception as e:
@@ -94,8 +101,12 @@ def download_media():
 @app.route('/get-file/<filename>')
 def get_file(filename):
     file_path = os.path.join(DOWNLOAD_FOLDER, filename)
+    user_filename = request.args.get('title')
+    if not user_filename:
+        user_filename = filename
+
     try:
-        return send_file(file_path, as_attachment=True)
+        return send_file(file_path, as_attachment=True, download_name=user_filename)
     except Exception as e:
         return str(e)
 
