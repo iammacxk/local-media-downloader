@@ -1,6 +1,7 @@
 import os
 import time
 import shutil
+import re # 🆕 เพิ่ม Library สำหรับจัดการข้อความ (RegEx)
 from flask import Flask, request, send_file, jsonify, render_template
 import yt_dlp
 from yt_dlp.utils import DownloadError
@@ -13,7 +14,10 @@ if not os.path.exists(DOWNLOAD_FOLDER):
 
 # --- ตั้งค่า Path ของ FFmpeg ---
 CUSTOM_FFMPEG_PATH = r"C:\ffmpeg\bin"
-COOKIES_FILE = 'cookies.txt'  # ชื่อไฟล์คุกกี้ที่ต้องการหา
+COOKIES_FILE = 'cookies.txt'
+
+# --- Global Dictionary เก็บความคืบหน้า ---
+download_progress = {}
 
 def get_ffmpeg_opts():
     if os.path.exists(os.path.join(CUSTOM_FFMPEG_PATH, 'ffmpeg.exe')):
@@ -22,11 +26,23 @@ def get_ffmpeg_opts():
         return {} 
     return {}
 
+# 🆕 ฟังก์ชันล้างรหัสสี ANSI (แก้ภาษาแปลกๆ)
+def clean_ansi(text):
+    if not text: return ""
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', str(text))
+
 @app.route('/')
 def index():
     return render_template('index.html')
 
-# --- 🆕 API: ดึงข้อมูล Video/Playlist ---
+@app.route('/progress', methods=['GET'])
+def get_progress():
+    req_id = request.args.get('id')
+    if req_id and req_id in download_progress:
+        return jsonify(download_progress[req_id])
+    return jsonify({'percent': 0, 'status': 'waiting'})
+
 @app.route('/fetch-info', methods=['POST'])
 def fetch_info():
     data = request.json
@@ -74,9 +90,7 @@ def fetch_info():
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 result = ydl.extract_info(url, download=False)
-            
             break 
-            
         except Exception as e:
             last_error = e
             err_msg = str(e).lower()
@@ -122,12 +136,12 @@ def fetch_info():
         'success': True, 'is_playlist': is_playlist, 'title': title, 'entries': entries
     })
 
-# --- API เดิม: ดาวน์โหลดไฟล์ ---
 @app.route('/download', methods=['POST'])
 def download_media():
     data = request.json
     url = data.get('url')
     format_type = data.get('type')
+    request_id = data.get('requestId')
 
     if not url: return jsonify({'error': 'กรุณาใส่ลิงก์'}), 400
 
@@ -135,14 +149,39 @@ def download_media():
     if os.path.exists(COOKIES_FILE):
         use_cookie_file = True
 
+    # --- Hook Function: ล้างรหัสสีก่อนส่ง ---
+    def progress_hook(d):
+        if request_id:
+            if d['status'] == 'downloading':
+                # ล้างรหัสสีออกจากข้อความ
+                p_str = clean_ansi(d.get('_percent_str', '0%')).replace('%','')
+                try:
+                    percent = float(p_str)
+                except:
+                    percent = 0
+                
+                speed = clean_ansi(d.get('_speed_str', 'N/A'))
+                eta = clean_ansi(d.get('_eta_str', 'N/A'))
+                
+                download_progress[request_id] = {
+                    'percent': percent,
+                    'speed': speed,
+                    'eta': eta,
+                    'status': 'downloading'
+                }
+            elif d['status'] == 'finished':
+                download_progress[request_id] = {
+                    'percent': 100,
+                    'speed': '-',
+                    'eta': '-',
+                    'status': 'processing'
+                }
+
     def create_opts(browser_source=None):
         opts = {
-            # --- 🔧 FIX: เปลี่ยนชื่อไฟล์ให้เป็นชื่อ Title ---
-            # ใช้ %(title)s แทน %(id)s และจำกัดความยาวชื่อไฟล์ไม่เกิน 200 ตัวอักษรป้องกัน Error
             'outtmpl': f'{DOWNLOAD_FOLDER}/%(title)s.%(ext)s',
             'trim_file_name': 200,
-            'restrictfilenames': False, # อนุญาตภาษาไทยและ Unicode
-            # --------------------------------------------
+            'restrictfilenames': False,
             'quiet': True,
             'no_warnings': True,
             'concurrent_fragment_downloads': 16, 
@@ -153,7 +192,8 @@ def download_media():
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Referer': url,
-            }
+            },
+            'progress_hooks': [progress_hook],
         }
         
         if browser_source == 'cookie_file':
@@ -191,10 +231,12 @@ def download_media():
         if any(domain in url for domain in ['twitter.com', 'x.com', 'pornhub.com', 'youtube.com', 'youtu.be']):
             browsers_to_try = ['edge', 'chrome', 'firefox', None]
 
-    print(f"🚀 Processing: {url}")
+    print(f"🚀 Processing: {url} [ID: {request_id}]")
     if use_cookie_file: print("🍪 Using cookies.txt mode")
 
-    # ตัวแปรสำหรับเก็บชื่อไฟล์ที่ save จริงๆ
+    if request_id:
+        download_progress[request_id] = {'percent': 0, 'speed': 'Starting...', 'status': 'starting'}
+
     final_filename_on_disk = None 
 
     for browser in browsers_to_try:
@@ -203,28 +245,16 @@ def download_media():
             if browser and browser != 'cookie_file': print(f"👉 Trying method: {browser}...")
             
             with yt_dlp.YoutubeDL(current_opts) as ydl:
-                # 1. โหลดข้อมูล
                 info = ydl.extract_info(url, download=True)
+                if 'entries' in info: target_info = info['entries'][0]
+                else: target_info = info
                 
-                # 2. คำนวณชื่อไฟล์ที่ yt-dlp สร้างขึ้นจริงๆ (เพราะมันจะตัดอักษรพิเศษออกให้)
-                if 'entries' in info:
-                    target_info = info['entries'][0]
-                else:
-                    target_info = info
-                
-                # prepare_filename จะคืนค่า path เต็ม เช่น downloads/MyVideo.webm
                 temp_path = ydl.prepare_filename(target_info)
-                
-                # 3. ปรับนามสกุลให้ตรงกับที่เรา Convert
                 base, _ = os.path.splitext(temp_path)
-                if format_type == 'mp3':
-                    final_path = base + '.mp3'
-                else:
-                    final_path = base + '.mp4'
+                if format_type == 'mp3': final_path = base + '.mp3'
+                else: final_path = base + '.mp4'
                 
-                # เก็บชื่อไฟล์เพียวๆ ไว้ส่งกลับไปให้ User
                 final_filename_on_disk = os.path.basename(final_path)
-
                 success = True
                 if browser: print(f"✅ Success using: {browser}")
                 break 
@@ -232,14 +262,14 @@ def download_media():
             err_msg = str(e).lower()
             last_error = e
             if "closed file" in err_msg: time.sleep(1)
-            
             is_cookie_issue = any(x in err_msg for x in ["closed file", "cookie", "browser", "lock", "copy", "decrypt", "dpapi"])
-            
             if is_cookie_issue and browser != 'cookie_file' and browser is not None:
                 print(f"⚠️ Cookie error in {browser}, skipping...")
                 continue
-                
             break
+
+    if request_id and request_id in download_progress:
+        del download_progress[request_id]
 
     if not success:
         error_text = str(last_error)
@@ -247,14 +277,10 @@ def download_media():
             error_text = "🔐 Browser ค้าง! (ลองใช้ไฟล์ cookies.txt เพื่อแก้ปัญหานี้)"
         elif "sensitive" in error_text.lower():
             error_text = "⚠️ ติดเนื้อหา Sensitive (กรุณาใช้ cookies.txt ที่ล็อกอินแล้ว)"
-        
         return jsonify({'error': error_text}), 500
 
     try:
-        # ไม่ต้องคำนวณชื่อไฟล์เองแล้ว ใช้ชื่อที่เราดึงมาจาก prepare_filename เลย
         filename_on_disk = final_filename_on_disk
-        
-        # ชื่อสำหรับ Download prompt (URL Encode)
         from urllib.parse import quote
         encoded_title = quote(filename_on_disk)
 
@@ -270,7 +296,6 @@ def download_media():
 @app.route('/get-file/<filename>')
 def get_file(filename):
     file_path = os.path.join(DOWNLOAD_FOLDER, filename)
-    # ใช้ชื่อไฟล์จริงเป็นชื่อ download เลย
     user_filename = request.args.get('title') or filename
     try: return send_file(file_path, as_attachment=True, download_name=user_filename)
     except Exception as e: return str(e)
