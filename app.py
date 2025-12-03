@@ -1,14 +1,34 @@
 import os
 import time
+import shutil # เพิ่มตัวช่วยเช็คโปรแกรมในเครื่อง
 from flask import Flask, request, send_file, jsonify, render_template
 import yt_dlp
 
 app = Flask(__name__, template_folder='templates')
 
-# โฟลเดอร์สำหรับเก็บไฟล์ชั่วคราว
 DOWNLOAD_FOLDER = 'downloads'
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
+
+# --- ตั้งค่า Path ของ FFmpeg ---
+# ระบบจะเช็คให้อัตโนมัติ:
+# 1. เช็คว่ามีโฟลเดอร์ C:\ffmpeg\bin หรือไม่ (สำหรับคนลง manual)
+# 2. ถ้าไม่มี จะปล่อยให้ yt-dlp หาในเครื่องเอง (สำหรับคนลง winget)
+CUSTOM_FFMPEG_PATH = r"C:\ffmpeg\bin"
+
+def get_ffmpeg_opts():
+    # เช็คว่ามีไฟล์ ffmpeg.exe ในโฟลเดอร์ที่ระบุไหม
+    if os.path.exists(os.path.join(CUSTOM_FFMPEG_PATH, 'ffmpeg.exe')):
+        print(f"Found FFmpeg at custom path: {CUSTOM_FFMPEG_PATH}")
+        return {'ffmpeg_location': CUSTOM_FFMPEG_PATH}
+    
+    # เช็คว่าในเครื่องมี ffmpeg หรือไม่ (ผ่าน Environment Variables)
+    if shutil.which('ffmpeg'):
+        print("Found FFmpeg in system PATH")
+        return {} # ไม่ต้องตั้งค่า path เดี๋ยว yt-dlp หาเจอเอง
+        
+    print("WARNING: FFmpeg not found! Merging video/audio might fail.")
+    return {}
 
 @app.route('/')
 def index():
@@ -18,49 +38,49 @@ def index():
 def download_media():
     data = request.json
     url = data.get('url')
-    format_type = data.get('type') # 'mp3' หรือ 'mp4'
+    format_type = data.get('type')
 
     if not url:
         return jsonify({'error': 'กรุณาใส่ลิงก์'}), 400
 
     try:
-        # การตั้งค่า yt-dlp
+        # เริ่มต้นตั้งค่า yt-dlp
         ydl_opts = {
             'outtmpl': f'{DOWNLOAD_FOLDER}/%(title)s.%(ext)s',
             'quiet': True,
             'no_warnings': True,
         }
+        
+        # เพิ่มการตั้งค่า FFmpeg แบบอัตโนมัติ
+        ydl_opts.update(get_ffmpeg_opts())
 
         if format_type == 'mp3':
             ydl_opts.update({
-                'format': 'bestaudio/best', # เอาเสียงที่ดีที่สุด
+                'format': 'bestaudio/best',
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
-                    'preferredquality': '192', # หรือ 320 ถ้าต้องการสูงสุด
+                    'preferredquality': '192',
                 }],
             })
+            ext = '.mp3'
         elif format_type == 'mp4':
-            # โหลดวิดีโอที่ดีที่สุด + เสียงที่ดีที่สุด แล้วรวมกัน (ต้องมี FFmpeg)
             ydl_opts.update({
-                'format': 'bestvideo+bestaudio/best',
+                # เลือกไฟล์ Video ที่เป็น mp4 และ Audio ที่เป็น m4a (AAC) เพื่อลดปัญหา codec
+                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
                 'merge_output_format': 'mp4',
             })
+            ext = '.mp4'
 
         print(f"Processing: {url} as {format_type}...")
         
-        # เริ่มดาวน์โหลด
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
             
-            # ปรับชื่อไฟล์ให้ตรงกับผลลัพธ์หลังแปลงไฟล์
-            if format_type == 'mp3':
-                final_filename = os.path.splitext(filename)[0] + '.mp3'
-            else:
-                final_filename = os.path.splitext(filename)[0] + '.mp4'
+            base, _ = os.path.splitext(filename)
+            final_filename = base + ext
 
-        # ส่งไฟล์กลับไปให้ User
         return jsonify({
             'success': True,
             'filename': os.path.basename(final_filename),
@@ -73,7 +93,6 @@ def download_media():
 
 @app.route('/get-file/<filename>')
 def get_file(filename):
-    # ส่งไฟล์และสั่งลบหลังจากส่งเสร็จ (อาจจะต้องใช้ background task ในงานจริง แต่แบบนี้ง่ายสุดสำหรับ local)
     file_path = os.path.join(DOWNLOAD_FOLDER, filename)
     try:
         return send_file(file_path, as_attachment=True)
@@ -81,5 +100,4 @@ def get_file(filename):
         return str(e)
 
 if __name__ == '__main__':
-    # รันบน localhost port 5000
     app.run(debug=True, port=5000)
