@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ultimate Downloader Pro</title>
+    <title>Local Downloader</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@17/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
@@ -30,7 +30,7 @@
 <script type="text/babel">
     const { useState, useEffect, useRef, useCallback } = React;
 
-    // --- Helper Functions (Moved outside to be stable) ---
+    // --- Helper Functions ---
     const getSourceInfo = (url) => {
         if (url.includes('youtube') || url.includes('youtu.be')) return { icon: 'fa-youtube', color: 'text-red-600', name: 'YouTube' };
         if (url.includes('tiktok')) return { icon: 'fa-tiktok', color: 'text-black', name: 'TikTok' };
@@ -46,7 +46,7 @@
         return <span className={`text-xs flex items-center gap-1 font-semibold ${source.color}`}><i className={`fa-brands ${source.icon}`}></i> {source.name}</span>;
     };
 
-    // --- ✨ Animated Counter Component (ตัวเลขวิ่ง) ---
+    // --- ✨ Animated Counter Component ---
     const AnimatedCounter = ({ value }) => {
         const [displayValue, setDisplayValue] = useState(0);
         
@@ -54,15 +54,12 @@
             let startValue = displayValue;
             let endValue = value;
             let startTime = null;
-            const duration = 500; // 0.5 วินาทีในการวิ่งไปหาค่าใหม่
+            const duration = 500;
 
             const step = (timestamp) => {
                 if (!startTime) startTime = timestamp;
                 const progress = Math.min((timestamp - startTime) / duration, 1);
-                
-                // สูตร Ease Out (ให้ตัวเลขวิ่งเร็วตอนต้น แล้วช้าตอนปลาย)
                 const ease = 1 - Math.pow(1 - progress, 3);
-                
                 const current = startValue + (endValue - startValue) * ease;
                 setDisplayValue(current);
 
@@ -81,11 +78,9 @@
     const QueueItem = React.memo(({ item, onRemove, onUpdateProgress }) => {
         const source = getSourceInfo(item.url);
 
-        // Polling Effect
         useEffect(() => {
             let interval;
             if (item.status === 'downloading') {
-                // เช็คถี่ขึ้น (ทุก 0.5 วินาที) เพื่อความลื่นไหล
                 interval = setInterval(async () => {
                     try {
                         const res = await fetch(`/progress?id=${item.requestId}`);
@@ -102,7 +97,6 @@
         return (
             <div className="bg-white p-3 rounded-lg shadow-sm border flex flex-col gap-2 transition hover:shadow-md animate-fade-in">
                 <div className="flex items-center gap-4">
-                    {/* Status Icon */}
                     <div className="w-10 flex justify-center flex-shrink-0">
                         {item.status === 'waiting' && <i className="fa-regular fa-clock text-gray-400 text-xl"></i>}
                         {item.status === 'downloading' && <div className="loader"></div>}
@@ -110,7 +104,6 @@
                         {item.status === 'error' && <i className="fa-solid fa-circle-exclamation text-red-500 text-xl"></i>}
                     </div>
 
-                    {/* Info */}
                     <div className="flex-1 min-w-0">
                         <div className="font-medium text-gray-800 truncate" title={item.title}>{item.title}</div>
                         <div className="flex items-center gap-3 mt-1 flex-wrap">
@@ -124,7 +117,6 @@
                         </div>
                     </div>
 
-                    {/* Buttons */}
                     <div className="flex gap-2 flex-shrink-0">
                         {item.status === 'done' && (
                             <a href={item.downloadUrl} className="w-8 h-8 flex items-center justify-center bg-green-100 text-green-600 hover:bg-green-600 hover:text-white rounded-full transition shadow-sm" title="Save File">
@@ -139,7 +131,6 @@
                     </div>
                 </div>
 
-                {/* ✨ Smooth Progress Bar Area */}
                 {item.status === 'downloading' && (
                     <div className="pl-14 pr-2 pb-1">
                         <div className="flex justify-between text-xs text-gray-500 mb-1 font-medium">
@@ -149,7 +140,6 @@
                                     : <span><i className="fa-solid fa-bolt text-yellow-500 mr-1"></i>{item.speed}</span>
                                 }
                             </span>
-                            {/* ใช้ AnimatedCounter ตรงนี้ */}
                             <AnimatedCounter value={item.progress} />
                         </div>
                         <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden shadow-inner">
@@ -226,6 +216,12 @@
             setUrlInput('');
         };
 
+        // --- 🆕 ฟังก์ชันล้างรายการ (Clear List) ---
+        const clearQueue = () => {
+            // ลบทุกอย่าง ยกเว้นตัวที่กำลังดาวน์โหลดอยู่ (status === 'downloading')
+            setQueue(prev => prev.filter(q => q.status === 'downloading'));
+        };
+
         useEffect(() => {
             if (isProcessingQueue) return;
             const nextItem = queue.find(q => q.status === 'waiting');
@@ -234,7 +230,7 @@
 
         const processDownload = async (item) => {
             setIsProcessingQueue(true);
-            updateQueueStatus(item.requestId, { status: 'downloading' }); // ใช้ Request ID อัปเดต
+            updateQueueStatus(item.requestId, { status: 'downloading' });
             try {
                 const res = await fetch('/download', {
                     method: 'POST',
@@ -251,7 +247,6 @@
             }
         };
 
-        // ฟังก์ชันอัปเดต state ที่เสถียรขึ้น (ใช้ useCallback)
         const updateQueueStatus = useCallback((reqId, updates) => {
             setQueue(prev => prev.map(q => q.requestId === reqId ? { ...q, ...updates } : q));
         }, []);
@@ -274,9 +269,9 @@
                     <div className="bg-white p-6 rounded-xl shadow-xl border border-gray-100">
                         <h1 className="text-2xl font-bold mb-1 text-gray-800 flex items-center">
                             <i className="fa-solid fa-cloud-arrow-down text-blue-600 mr-2"></i> 
-                            Local Downloader Pro
+                            Local Downloader 1.0
                         </h1>
-                        <p className="text-xs text-gray-400 mb-5 pl-10">  โหลดวิดีโอ/เพลง คุณภาพสูง รองรับ 4K</p>
+                        <p className="text-xs text-gray-400 mb-5 pl-10">โหลดวิดีโอ/เพลง คุณภาพสูง รองรับ 4K</p>
                         
                         <div className="space-y-3">
                             <div className="relative">
@@ -326,7 +321,20 @@
                     <div className="bg-white rounded-xl shadow-xl overflow-hidden flex flex-col h-[80vh] border border-gray-100">
                         <div className="p-4 border-b bg-gray-50/50 flex justify-between items-center backdrop-blur-sm">
                             <h2 className="font-bold text-gray-700 flex items-center"><i className="fa-solid fa-list-check mr-2 text-blue-500"></i> รายการรอโหลด <span className="ml-2 bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full text-xs">{queue.length}</span></h2>
-                            <div className="text-xs font-medium text-gray-500">เสร็จแล้ว {queue.filter(q => q.status === 'done').length} รายการ</div>
+                            
+                            {/* --- 🆕 ปุ่มล้างรายการ (Clear List) --- */}
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs font-medium text-gray-500 mr-2">เสร็จแล้ว {queue.filter(q => q.status === 'done').length} รายการ</span>
+                                {queue.length > 0 && (
+                                    <button 
+                                        onClick={clearQueue} 
+                                        className="text-xs bg-gray-100 hover:bg-red-100 text-gray-600 hover:text-red-600 px-3 py-1.5 rounded-full transition flex items-center gap-1"
+                                        title="ลบรายการที่เสร็จแล้วและรอคิวทั้งหมด"
+                                    >
+                                        <i className="fa-solid fa-trash-can"></i> ล้างรายการ
+                                    </button>
+                                )}
+                            </div>
                         </div>
 
                         <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50/30">
